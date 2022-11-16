@@ -1,6 +1,9 @@
 config WHPX
     bool
 
+config NOIRCV
+    bool
+
 config NVMM
     bool
 

@@ -58,6 +58,8 @@ option('hax', type: 'feature', value: 'auto',
        description: 'HAX acceleration support')
 option('whpx', type: 'feature', value: 'auto',
        description: 'WHPX acceleration support')
+option('noircv', type: 'feature', value: 'auto',
+       description: 'NoirVisor CVM acceleration support')
 option('hvf', type: 'feature', value: 'auto',
        description: 'HVF acceleration support')
 option('nvmm', type: 'feature', value: 'auto',

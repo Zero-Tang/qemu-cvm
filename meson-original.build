@@ -132,7 +132,6 @@ if cpu in ['x86', 'x86_64']
     'CONFIG_HVF': ['x86_64-softmmu'],
     'CONFIG_NVMM': ['i386-softmmu', 'x86_64-softmmu'],
     'CONFIG_WHPX': ['i386-softmmu', 'x86_64-softmmu'],
-    'CONFIG_NOIRCV': ['i386-softmmu', 'x86_64-softmmu'],
   }
 endif
 
@@ -363,11 +362,6 @@ if get_option('whpx').allowed() and targetos == 'windows'
     accelerators += 'CONFIG_WHPX'
   endif
 endif
-if get_option('noircv').allowed()
-  if get_option('noircv').enabled() and targetos == 'windows'
-    accelerators += 'CONFIG_NOIRCV'
-  endif
-endif
 if get_option('hvf').allowed()
   hvf = dependency('appleframeworks', modules: 'Hypervisor',
                    required: get_option('hvf'))
@@ -430,9 +424,6 @@ if 'CONFIG_NVMM' not in accelerators and get_option('nvmm').enabled()
 endif
 if 'CONFIG_WHPX' not in accelerators and get_option('whpx').enabled()
   error('WHPX not available on this platform')
-endif
-if 'CONFIG_NOIRCV' not in accelerators and get_option('noircv').enabled()
-  error('NoirVisor CVM not available on this platform')
 endif
 if not have_xen_pci_passthrough and get_option('xen_pci_passthrough').enabled()
   if 'CONFIG_XEN' in accelerators
@@ -3601,7 +3592,6 @@ if have_system
   summary_info += {'HAX support':       config_all.has_key('CONFIG_HAX')}
   summary_info += {'HVF support':       config_all.has_key('CONFIG_HVF')}
   summary_info += {'WHPX support':      config_all.has_key('CONFIG_WHPX')}
-  summary_info += {'NOIRCV support':    config_all.has_key('CONFIG_NOIRCV')}
   summary_info += {'NVMM support':      config_all.has_key('CONFIG_NVMM')}
   summary_info += {'Xen support':       config_host.has_key('CONFIG_XEN_BACKEND')}
   if config_host.has_key('CONFIG_XEN_BACKEND')

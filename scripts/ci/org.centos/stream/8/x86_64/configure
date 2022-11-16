@@ -104,6 +104,7 @@
 --disable-pvrdma \
 --disable-qcow1 \
 --disable-qed \
+--disable-qga-vss \
 --disable-qom-cast-debug \
 --disable-rbd \
 --disable-rdma \
@@ -177,6 +178,7 @@
 --enable-malloc-trim \
 --enable-modules \
 --enable-mpath \
+--enable-noircv \
 --enable-numa \
 --enable-opengl \
 --enable-pie \
