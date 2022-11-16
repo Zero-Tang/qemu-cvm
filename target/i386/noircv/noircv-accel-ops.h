@@ -14,7 +14,15 @@
 
 #include "noircv-interface.h"
 
-int ncv_init_vcpu(CPUState *cpu);
+void ncv_init_vcpu(CPUState *cpu);
+int ncv_exec_vcpu(CPUState *cpu);
+void ncv_destroy_vcpu(CPUState *cpu);
+void ncv_kick_vcpu(CPUState *cpu);
+
+void ncv_cpu_synchronize_state(CPUState *cpu);
+void ncv_cpu_synchronize_post_reset(CPUState *cpu);
+void ncv_cpu_synchronize_post_init(CPUState *cpu);
+void ncv_cpu_synchronize_pre_loadvm(CPUState *cpu);
 
 noir_status ncv_create_vm(cv_handle *vm);
 noir_status ncv_delete_vm(cv_handle vm);

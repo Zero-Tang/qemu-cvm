@@ -38,3 +38,35 @@
 #define IOCTL_CvmRescindVcpu	CTL_CODE_GEN(0x895)
 #define IOCTL_CvmInjectEvent	CTL_CODE_GEN(0x896)
 #define IOCTL_CvmSetVcpuOptions	CTL_CODE_GEN(0x897)
+
+typedef struct _NOIR_VIEW_EDIT_REGISTER_CONTEXT
+{
+	CVM_HANDLE VirtualMachine;
+	ULONG32 VpIndex;
+	cv_reg_type RegisterType;
+	PVOID DummyBuffer;
+}NOIR_VIEW_EDIT_REGISTER_CONTEXT,*PNOIR_VIEW_EDIT_REGISTER_CONTEXT;
+
+typedef struct _NOIR_QUERY_ADBITMAP_CONTEXT
+{
+	CVM_HANDLE VirtualMachine;
+	ULONG64 GpaStart;
+	ULONG64 BitmapBuffer;
+	ULONG32 BitmapLength;
+	ULONG32 NumberOfPages;
+}NOIR_QUERY_ADBITMAP_CONTEXT,*PNOIR_QUERY_ADBITMAP_CONTEXT;
+
+typedef union _NOIR_CVM_EVENT_INJECTION
+{
+	struct
+	{
+		ULONG64 Vector:8;
+		ULONG64 Type:3;
+		ULONG64 ErrorCodeValid:1;
+		ULONG64 Reserved:15;
+		ULONG64 Priority:4;
+		ULONG64 Valid:1;
+		ULONG64 ErrorCode:32;
+	};
+	ULONG64 Value;
+}NOIR_CVM_EVENT_INJECTION,*PNOIR_EVENT_INJECTION;

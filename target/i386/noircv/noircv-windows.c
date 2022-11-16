@@ -12,8 +12,8 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "noircv-windows.h"
 #include "noircv-accel-ops.h"
+#include "noircv-windows.h"
 
 static HANDLE nvdrv_handle;
 
@@ -33,9 +33,9 @@ static BOOL NoirControlDriver(IN ULONG IoControlCode,IN PVOID InputBuffer,IN ULO
 
 noir_status ncv_set_mapping(cv_handle vm,cv_addr_map_info *mapping_info)
 {
-	NOIR_STATUS st=NOIR_UNSUCCESSFUL;
+	NOIR_STATUS st=noir_unsuccessful;
 	ULONG64 InBuff[4];
-	RtlCopyMemory(InBuff,mapping_info,sizeof(NOIR_ADDRESS_MAPPING));
+	RtlCopyMemory(InBuff,mapping_info,sizeof(cv_addr_map_info));
 	InBuff[3]=(ULONG64)vm;
 	NoirControlDriver(IOCTL_CvmSetMapping,InBuff,sizeof(InBuff),&st,sizeof(st),NULL);
 	return st;
@@ -48,10 +48,10 @@ noir_status ncv_create_vm(cv_handle *vm)
 	if(bRet)
 	{
 		NOIR_STATUS st=(NOIR_STATUS)OutBuff[0];
-		if(st==NOIR_SUCCESS)*vm=(CVM_HANDLE)OutBuff[1];
+		if(st==noir_success)*vm=(CVM_HANDLE)OutBuff[1];
 		return st;
 	}
-	return NOIR_UNSUCCESSFUL;
+	return noir_unsuccessful;
 }
 
 noir_status ncv_delete_vm(cv_handle vm)
@@ -63,7 +63,7 @@ noir_status ncv_delete_vm(cv_handle vm)
 
 noir_status ncv_inject_event(cv_handle vm,u32 vpid,bool valid,u8 vector,u8 type,u8 priority,bool error_code_valid,u32 err_code)
 {
-	NOIR_STATUS st=NOIR_UNSUCCESSFUL;
+	NOIR_STATUS st=noir_unsuccessful;
 	NOIR_CVM_EVENT_INJECTION Event={0};
 	ULONG64 InBuff[3];
 	Event.Vector=vector;
@@ -82,8 +82,8 @@ noir_status ncv_inject_event(cv_handle vm,u32 vpid,bool valid,u8 vector,u8 type,
 
 noir_status ncv_run_vcpu(cv_handle vm,u32 vpid,cv_exit_context *exit_context)
 {
-	NOIR_STATUS st=NOIR_UNSUCCESSFUL;
-	PVOID OutBuff=alloca(sizeof(NOIR_CVM_EXIT_CONTEXT)+8);
+	NOIR_STATUS st=noir_unsuccessful;
+	PVOID OutBuff=alloca(sizeof(cv_exit_context)+8);
 	if(OutBuff)
 	{
 		ULONG_PTR InBuff[2];
@@ -91,11 +91,10 @@ noir_status ncv_run_vcpu(cv_handle vm,u32 vpid,cv_exit_context *exit_context)
 		InBuff[1]=(ULONG_PTR)vpid;
 		do
 		{
-			NoirControlDriver(IOCTL_CvmRunVcpu,InBuff,sizeof(InBuff),OutBuff,sizeof(NOIR_CVM_EXIT_CONTEXT)+8,NULL);
-			RtlCopyMemory(exit_context,(PVOID)((ULONG_PTR)OutBuff+8),sizeof(NOIR_CVM_EXIT_CONTEXT));
+			NoirControlDriver(IOCTL_CvmRunVcpu,InBuff,sizeof(InBuff),OutBuff,sizeof(cv_exit_context)+8,NULL);
+			RtlCopyMemory(exit_context,(PVOID)((ULONG_PTR)OutBuff+8),sizeof(cv_exit_context));
 			// Re-run the vCPU if the scheduler issued an exit.
-			// This guarantees a terminatable process.
-		}while(exit_context->InterceptCode==CvSchedulerExit);
+		}while(exit_context->intercept_code==cv_scheduler_exit);
 		st=*(PULONG32)OutBuff;
 	}
 	return st;
@@ -103,7 +102,7 @@ noir_status ncv_run_vcpu(cv_handle vm,u32 vpid,cv_exit_context *exit_context)
 
 noir_status ncv_rescind_vcpu(cv_handle vm,u32 vpid)
 {
-	NOIR_STATUS st=NOIR_UNSUCCESSFUL;
+	NOIR_STATUS st=noir_unsuccessful;
 	ULONG64 InBuff[2]={vm,(ULONG64)vpid};
 	NoirControlDriver(IOCTL_CvmRescindVcpu,InBuff,sizeof(InBuff),&st,sizeof(st),NULL);
 	return st;
@@ -111,7 +110,7 @@ noir_status ncv_rescind_vcpu(cv_handle vm,u32 vpid)
 
 noir_status ncv_edit_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,void* buffer,u32 buff_size)
 {
-	NOIR_STATUS st=NOIR_INSUFFICIENT_RESOURCES;
+	NOIR_STATUS st=noir_insufficient_resources;
 	// Allocate memory from stack to avoid inter-thread serializations by virtue of heap operations.
 	PVOID InBuff=alloca(buff_size+sizeof(NOIR_VIEW_EDIT_REGISTER_CONTEXT));
 	if(InBuff)
@@ -128,7 +127,7 @@ noir_status ncv_edit_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,vo
 
 noir_status ncv_view_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,void* buffer,u32 buff_size)
 {
-	NOIR_STATUS st=NOIR_INSUFFICIENT_RESOURCES;
+	NOIR_STATUS st=noir_insufficient_resources;
 	// Allocate memory from stack to avoid inter-thread serializations by virtue of heap operations.
 	PVOID OutBuff=alloca(buff_size+sizeof(NOIR_VIEW_EDIT_REGISTER_CONTEXT));
 	if(OutBuff)
@@ -146,7 +145,7 @@ noir_status ncv_view_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,vo
 
 noir_status ncv_create_vcpu(cv_handle vm,u32 vpid)
 {
-	NOIR_STATUS st=NOIR_UNSUCCESSFUL;
+	NOIR_STATUS st=noir_unsuccessful;
 	ULONG_PTR InBuff[2]={vm,vpid};
 	NoirControlDriver(IOCTL_CvmCreateVcpu,InBuff,sizeof(InBuff),&st,sizeof(st),NULL);
 	return st;
@@ -154,7 +153,7 @@ noir_status ncv_create_vcpu(cv_handle vm,u32 vpid)
 
 noir_status ncv_delete_vcpu(cv_handle vm,u32 vpid)
 {
-	NOIR_STATUS st=NOIR_UNSUCCESSFUL;
+	NOIR_STATUS st=noir_unsuccessful;
 	ULONG_PTR InBuff[2]={vm,vpid};
 	NoirControlDriver(IOCTL_CvmDeleteVcpu,InBuff,sizeof(InBuff),&st,sizeof(st),NULL);
 	return st;
