@@ -29,11 +29,16 @@
 #define NOIR_VCPU_NOT_EXIST				0xC0000008
 #define NOIR_USER_PAGE_VIOLATION		0xC0000009
 
+#ifdef CONFIG_WIN32
 typedef ULONG32 NOIR_STATUS;
+typedef ULONG64 CVM_HANDLE;
+typedef PULONG64 PCVM_HANDLE;
 
-// Layered Hypervisor Functions
-typedef ULONG_PTR CVM_HANDLE;
-typedef PULONG_PTR PCVM_HANDLE;
+typedef BYTE	u8;
+typedef USHORT	u16;
+typedef ULONG32	u32;
+typedef ULONG64	u64;
+#endif
 
 typedef union _NOIR_CVM_EVENT_INJECTION
 {
@@ -55,7 +60,7 @@ typedef enum _NOIR_CVM_VIRTUAL_PROCESSOR_OPTION_TYPE
 	NoirCvmGuestVpOptions,
 	NoirCvmExceptionBitmap,
 	NoirCvmSchedulingPriority
-}NOIR_CVM_VIRTUAL_PROCESSOR_OPTION_TYPE;*PNOIR_CVM_VIRTUAL_PROCESSOR_OPTION_TYPE;
+}NOIR_CVM_VIRTUAL_PROCESSOR_OPTION_TYPE,*PNOIR_CVM_VIRTUAL_PROCESSOR_OPTION_TYPE;
 
 typedef struct _NOIR_GPR_STATE
 {
@@ -383,3 +388,10 @@ typedef struct _NOIR_CVM_EXIT_CONTEXT
 		ULONG32 Reserved:23;
 	}VpState;
 }NOIR_CVM_EXIT_CONTEXT,*PNOIR_CVM_EXIT_CONTEXT;
+
+typedef NOIR_STATUS noir_status;
+typedef CVM_HANDLE cv_handle;
+typedef NOIR_ADDRESS_MAPPING cv_addr_map_info;
+typedef NOIR_CVM_REGISTER_TYPE cv_reg_type;
+typedef NOIR_CVM_EXIT_CONTEXT cv_exit_context;
+#endif

@@ -27,7 +27,10 @@
 #include "qapi/qapi-visit-common.h"
 #include "migration/blocker.h"
 
+#include "noircv-accel-ops.h"
+
 static bool noircv_allowed;
+static cv_handle vmhandle;
 
 int noircv_enabled(void)
 {
@@ -36,14 +39,43 @@ int noircv_enabled(void)
 
 static int ncv_init(ram_addr_t ram_size,int max_cpus)
 {
-	return 0;
+	int ret;
+#ifdef CONFIG_WIN32
+	ret=ncv_win_init();
+#endif
+	if(ret==0)
+		fprintf(stderr,"NoirVisor is absent in the system!\n");
+	else
+	{
+		noir_status st=ncv_create_vm(&vmhandle);
+		if(st==NOIR_SUCCESS)
+		{
+			for(int i=0;i<max_cpus;i++)
+			{
+				st=ncv_create_vcpu(vmhandle,i);
+				if(st!=NOIR_SUCCESS)
+				{
+					fprintf(stderr,"Failed to create vCPU %d! Status: 0x%X\n",i,st);
+					ret=0;
+					break;
+				}
+			}
+		}
+		else
+		{
+			if(st==NOIR_HYPERVISION_ABSENT)
+				fprintf(stderr,"NoirVisor did not subvert the system!\n");
+			else
+				fprintf(stderr,"Failed to create VM! Status: 0x%X\n",st);
+			ret=0;
+		}
+	}
+	return ret;
 }
 
 static int ncv_accel_init(MachineState *ms)
 {
-	int ret=ncv_init(ms->ram_size,(int)ms->smp.max_cpus);
-	fprintf(stderr,"NoirVisor is %s in the system!\n",ret?"present":"absent");
-	return ret;
+	return ncv_init(ms->ram_size,(int)ms->smp.max_cpus);
 }
 
 static void ncv_accel_class_init(ObjectClass *oc,void *data)
