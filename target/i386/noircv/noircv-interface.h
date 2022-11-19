@@ -41,9 +41,8 @@ typedef ULONG64	u64;
 
 typedef enum _cv_vcpu_option_type
 {
-	NoirCvmGuestVpOptions,
-	NoirCvmExceptionBitmap,
-	NoirCvmSchedulingPriority
+	cv_vcpu_options,
+	cv_exception_bitmap
 }cv_vcpu_option_type,*cv_vcpu_option_type_p;
 
 typedef struct _cv_gpr_state
@@ -73,6 +72,20 @@ typedef struct _cv_cr_state
 	u64 cr4;
 }cv_cr_state,*cv_cr_state_p;
 
+typedef struct _cv_dr_state
+{
+	u64 dr0;
+	u64 dr1;
+	u64 dr2;
+	u64 dr3;
+}cv_dr_state,*cv_dr_state_p;
+
+typedef struct _cv_dr67_state
+{
+	u64 dr6;
+	u64 dr7;
+}cv_dr67_state,*cv_dr67_state_p;
+
 typedef union _r128
 {
 	float f[4];
@@ -101,71 +114,90 @@ typedef struct _cv_xmm_state
 
 // 512-byte region of fxsave instruction.
 // Including fPU, x87, XMM.
-typedef struct _cv_fx_state
+typedef struct __attribute__((aligned(8))) _cv_fx_state
 {
-	struct
+	uint16_t fcw;
+	uint16_t fsw;
+	uint8_t ftw;
+	uint8_t res1;
+	uint16_t fop;
+	union
 	{
-		u16 fcw;
-		u16 fsw;
-		u8 ftw;
-		u8 reserved;
-		u16 fop;
-		u32 fip;
-		u16 fcs;
-		u16 reserved1;
-#if defined(_WIN64)
-		u64 fdp;
-#else
-		u32 fdp;
-		u16 fds;
-		u16 reserved2;
-#endif
-		u32 fxcsr;
-		u32 fxcsrfask;
-	}fpu;
-	struct
+		struct
+		{
+			uint32_t fip;
+			uint16_t fcs;
+			uint16_t res2;
+		};
+		uint64_t fpu_ip;
+	};
+	union
 	{
-		u64 fm0;		// St0
-		u64 reserved0;
-		u64 fm1;		// St1
-		u64 reserved1;
-		u64 fm2;		// St2
-		u64 reserved2;
-		u64 fm3;		// St3
-		u64 reserved3;
-		u64 fm4;		// St4
-		u64 reserved4;
-		u64 fm5;		// St5
-		u64 reserved5;
-		u64 fm6;		// St6
-		u64 reserved6;
-		u64 fm7;		// St7
-		u64 reserved7;
-	}x87;
-	cv_xmm_state sse;
-#if defined(_WIN64)
-	u64 reserved[6];
-#else
-	u64 reserved[22];
-#endif
-	u64 available[6];
+		struct
+		{
+			uint32_t fdp;
+			uint16_t fds;
+			uint16_t res3;
+		};
+		uint64_t fpu_dp;
+	};
+	uint32_t mxcsr;
+	uint32_t mxcsr_mask;
+	uint8_t st_mm[8][16];
+	uint8_t mmx_1[8][16];
+	uint8_t mmx_2[8][16];
+	uint8_t pad[96];
 }cv_fx_state,*cv_fx_state_p;
 
 typedef struct _cv_seg_reg
 {
-	u16 Selector;
-	u16 Attributes;
-	u32 Limit;
-	u64 Base;
+	u16 selector;
+	u16 attrib;
+	u32 limit;
+	u64 base;
 }cv_seg_reg,*cv_seg_reg_p;
 
 typedef struct _cv_sr_state
 {
-	cv_seg_reg Es;
-	cv_seg_reg Cs;
-	cv_seg_reg Ss;
-	cv_seg_reg Ds;
+	cv_seg_reg es;
+	cv_seg_reg cs;
+	cv_seg_reg ss;
+	cv_seg_reg ds;
 }cv_sr_state,*cv_sr_state_p;
+
+typedef struct _cv_fg_state
+{
+	cv_seg_reg fs;
+	cv_seg_reg gs;
+	u64 gsswap;
+}cv_fg_state,*cv_fg_state_p;
+
+typedef struct _cv_lt_state
+{
+	cv_seg_reg tr;
+	cv_seg_reg ldtr;
+}cv_lt_state,*cv_lt_state_p;
+
+typedef struct _cv_dt_state
+{
+	cv_seg_reg gdtr;
+	cv_seg_reg idtr;
+}cv_dt_state,*cv_dt_state_p;
+
+typedef struct _cv_sysenter_state
+{
+	u64 sysenter_cs;
+	u64 sysenter_esp;
+	u64 sysenter_eip;
+}cv_sysenter_state,*cv_sysenter_state_p;
+
+typedef struct _cv_syscall_state
+{
+	u64 star;
+	u64 lstar;
+	u64 cstar;
+	u64 sfmask;
+}cv_syscall_state,*cv_syscall_state_p;
 
 #define cv_memtype_uc		0
 #define cv_memtype_wc		1
@@ -176,23 +208,23 @@ typedef struct _cv_sr_state
 
 typedef struct _cv_addr_map_info
 {
-	u64 GPA;
-	u64 HVA;
-	u32 NumberOfPages;
+	u64 gpa;
+	u64 hva;
+	u32 page_total;
 	union
 	{
 		struct
 		{
-			u32 Present:1;
-			u32 Write:1;
-			u32 Execute:1;
-			u32 User:1;
-			u32 Caching:3;
-			u32 PageSize:2;
-			u32 Reserved:23;
+			u32 present:1;
+			u32 write:1;
+			u32 execute:1;
+			u32 user:1;
+			u32 caching:3;
+			u32 page_size:2;
+			u32 reserved:23;
 		};
-		u32 Value;
-	}Attributes;
+		u32 value;
+	}attrib;
 }cv_addr_map_info,*cv_addr_map_info_p;
 
 typedef enum _cv_reg_type
@@ -216,6 +248,8 @@ typedef enum _cv_reg_type
 	cv_xcr0,
 	cv_efer,
 	cv_pat,
+	cv_lbr,
+	cv_tsc,
 	cv_maximum
 }cv_reg_type,*cv_reg_type_p;
 
@@ -224,7 +258,7 @@ typedef enum _cv_intercept_code
 	cv_invalid_state=0,
 	cv_shutdown_condition=1,
 	cv_memory_access=2,
-	cv_init_signal=3,
+	cv_rsm_instruction=3,
 	cv_hlt_instruction=4,
 	cv_io_instruction=5,
 	cv_cpuid_instruction=6,
@@ -267,14 +301,14 @@ typedef struct _cv_exception_context
 {
 	struct
 	{
-		u32 Vector:5;
-		u32 EvValid:1;
-		u32 Reserved:26;
+		u32 vector:5;
+		u32 ec_valid:1;
+		u32 reserved:26;
 	};
-	u32 ErrorCode;
-	u64 PageFaultAddress;
-	u8 FetchedBytes;
-	u8 InstructionBytes[15];
+	u32 error_code;
+	u64 pf_addr;
+	u8 fetched_bytes;
+	u8 instruction_bytes[15];
 }cv_exception_context,*cv_exception_context_p;
 
 typedef struct _cv_io_context
@@ -345,14 +379,40 @@ typedef struct _cv_exit_context
 	u64 next_rip;
 	struct
 	{
-		u32 cpl:2;
-		u32 pe:1;
-		u32 lm:1;
-		u32 interrupt_shadow:1;
-		u32 instruction_length:4;
-		u32 reserved:23;
+		u64 cpl:2;
+		u64 pe:1;
+		u64 lm:1;
+		u64 interrupt_shadow:1;
+		u64 instruction_length:4;
+		u64 int_pending:1;
+		u64 reserved:54;
 	}vp_state;
 }cv_exit_context,*cv_exit_context_p;
+
+typedef struct _cv_emu_info_header
+{
+	u32 length;
+	u32 type;
+}cv_emu_info_header,*cv_emu_info_header_p;
+
+typedef struct _cv_emu_mmio_info
+{
+	cv_emu_info_header header;
+	union
+	{
+		struct
+		{
+			u64 direction:1;
+			u64 advancement_length:4;
+			u64 reserved:27;
+			u64 access_size:32;
+		};
+		u64 value;
+	}emulation_property;
+	u64 address;
+	u64 data_size;
+	u8 data[64];
+}cv_emu_mmio_info,*cv_emu_mmio_info_p;
 
 typedef NOIR_STATUS noir_status;
 typedef CVM_HANDLE cv_handle;

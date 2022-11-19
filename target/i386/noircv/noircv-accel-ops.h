@@ -34,6 +34,11 @@ noir_status ncv_edit_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,vo
 noir_status ncv_view_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,void* buffer,u32 buff_size);
 noir_status ncv_run_vcpu(cv_handle vm,u32 vpid,cv_exit_context *exit_context);
 noir_status ncv_rescind_vcpu(cv_handle vm,u32 vpid);
+noir_status ncv_try_cvexit_emulation(cv_handle vm,u32 vpid,cv_emu_info_header_p info);
 int ncv_win_init(void);
+
+#define NOIRCV_SET_RUNTIME_STATE    1
+#define NOIRCV_SET_RESET_STATE      2
+#define NOIRCV_SET_FULL_STATE       3
 
 #endif /* NOIRCV_CPUS_H */

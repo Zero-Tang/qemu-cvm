@@ -38,6 +38,8 @@
 #define IOCTL_CvmRescindVcpu	CTL_CODE_GEN(0x895)
 #define IOCTL_CvmInjectEvent	CTL_CODE_GEN(0x896)
 #define IOCTL_CvmSetVcpuOptions	CTL_CODE_GEN(0x897)
+#define IOCTL_CvmQueryVcpuStats	CTL_CODE_GEN(0x898)
+#define IOCTL_CvmTryEmuExit		CTL_CODE_GEN(0x899)
 
 typedef struct _NOIR_VIEW_EDIT_REGISTER_CONTEXT
 {
