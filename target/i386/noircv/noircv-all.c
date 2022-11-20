@@ -58,6 +58,37 @@ static noircv_vcpu_p get_noircv_vcpu(CPUState *cpu)
 	return (noircv_vcpu_p)cpu->hax_vcpu;
 }
 
+static bool ncv_copy_physical(void* buffer,u64 gpa,u64 size,bool read)
+{
+	u64 cur_gpa=gpa;
+	u64 rem_size=size;
+	void* cur_buff=buffer;
+	bool fully_copied=false;
+	for(u32 i=0;i<cv_map_list_limit;i++)
+	{
+		cvmap_list_p info=&cv_map_info_list[i];
+		if(cur_gpa>=info->start_pa && cur_gpa<info->start_pa+info->size)
+		{
+			u64 region_offset=cur_gpa-info->start_pa;
+			u64 region_remainder=info->size-region_offset;
+			u64 copy_size=rem_size>region_remainder?region_remainder:rem_size;
+			if(read)
+				memcpy(cur_buff,(void*)((uintptr_t)info->host_va+region_offset),copy_size);
+			else
+				memcpy((void*)((uintptr_t)info->host_va+region_offset),cur_buff,copy_size);
+			cur_gpa+=copy_size;
+			cur_buff=(void*)((uintptr_t)cur_buff+copy_size);
+			rem_size-=copy_size;
+			if(rem_size==0)
+			{
+				fully_copied=true;
+				break;
+			}
+		}
+	}
+	return fully_copied;
+}
+
 static void ncv_update_mapping(hwaddr start_pa,ram_addr_t size,void* host_va,bool add,bool rom)
 {
 	cv_addr_map_info map_info;
@@ -85,6 +116,7 @@ static void ncv_update_mapping(hwaddr start_pa,ram_addr_t size,void* host_va,boo
 
 static void ncv_process_section(MemoryRegionSection *section,bool add)
 {
+	bool list_mapped=false;
 	MemoryRegion *mr=section->mr;
 	hwaddr start_pa=section->offset_within_address_space;
 	ram_addr_t size=int128_get64(section->size);
@@ -92,13 +124,33 @@ static void ncv_process_section(MemoryRegionSection *section,bool add)
 	u64 host_va;
 	if(!memory_region_is_ram(mr))return;
 	delta=qemu_real_host_page_size-(start_pa & ~qemu_real_host_page_mask);
-	delta&=qemu_real_host_page_mask;
+	delta&=~qemu_real_host_page_mask;
 	if(delta>size)return;
 	start_pa+=delta;
 	size-=delta;
 	size&=qemu_real_host_page_mask;
 	if(!size || (start_pa & ~qemu_real_host_page_mask))return;
 	host_va=(uintptr_t)memory_region_get_ram_ptr(mr)+section->offset_within_region+delta;
+	// Add updates...
+	for(u32 i=0;i<cv_map_list_limit;i++)
+	{
+		if(add && cv_map_info_list[i].host_va==NULL)
+		{
+			cv_map_info_list[i].host_va=(void*)host_va;
+			cv_map_info_list[i].start_pa=start_pa;
+			cv_map_info_list[i].size=size;
+			list_mapped=true;
+			break;
+		}
+		else if((!add) && (cv_map_info_list[i].start_pa==start_pa) && (cv_map_info_list[i].size==size))
+		{
+			memset(&cv_map_info_list[i],0,sizeof(cvmap_list));
+			list_mapped=true;
+			break;
+		}
+	}
+	if(!list_mapped)fprintf(stderr,"Failed to process section!\n");
+	// Update NPT.
 	ncv_update_mapping(start_pa,size,(void*)host_va,add,memory_region_is_rom(mr));
 }
 
@@ -138,7 +190,8 @@ static MemoryListener ncv_memory_listener=
 	.commit=ncv_transaction_commit,
 	.region_add=ncv_region_add,
 	.region_del=ncv_region_del,
-	.log_sync=ncv_log_sync
+	.log_sync=ncv_log_sync,
+	.priority=10
 };
 
 static void ncv_memory_init(void)
@@ -150,25 +203,68 @@ static void ncv_handle_portio(CPUState *cpu,const cv_io_context_p io_ctxt)
 {
 	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
 	cv_exit_context_p exit_ctxt=&vcpu->exit_context;
+	MemTxAttrs attrs={0};
 	if(io_ctxt->access.string)
 	{
 		u64 size=io_ctxt->access.operand_size;
+		u64 mask=0;
 		// Calculate the GVA
 		u64 gva=io_ctxt->segment.base,gpa;
 		if(io_ctxt->access.io_type)
 			gva+=io_ctxt->rdi;
 		else
 			gva+=io_ctxt->rsi;
-		gva&=(1<<(io_ctxt->access.address_width<<3))-1;
-		if(io_ctxt->access.repeat)
-			size*=io_ctxt->rcx;
-		gpa=cpu_get_phys_page_debug(cpu,gva);
-		fprintf(stderr,"NoirVisor CVM: String Port I/O is unsupported! Port=0x%04X. GVA=0x%llX, GPA=0x%llX, Size=%llu\n",io_ctxt->port,gva,gpa,size);
-		qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+		// Mask with address width.
+		memset(&mask,0xFF,io_ctxt->access.address_width);
+		gva&=mask;
+		if(io_ctxt->access.repeat)size*=io_ctxt->rcx;
+		if(exit_ctxt->vp_state.pg)
+		{
+			// FIXME: Do permission checks, translations...
+			gpa=cpu_get_phys_page_debug(cpu,gva);
+			fprintf(stderr,"NoirVisor CVM: String Port I/O, while paging is on, is unsupported!\n");
+			fprintf(stderr,"Port=0x%04X. GVA=0x%llX, GPA=0x%llX, Size=%llu\n",io_ctxt->port,gva,gpa,size);
+			system("pause");
+			qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+		}
+		else
+		{
+			// If paging is turned off, then gva is gpa.
+			u8 *io_buff=malloc(size);
+			if(io_buff)
+			{
+				bool result;
+				// Make sure to split in I/O address space, or otherwise it will be overflowing to other ports.
+				if(io_ctxt->access.io_type)
+				{
+					for(u64 i=0;i<size;i+=io_ctxt->access.operand_size)
+						address_space_read(&address_space_io,io_ctxt->port,attrs,&io_buff[i],io_ctxt->access.operand_size);
+					result=ncv_copy_physical(io_buff,gva,size,false);
+				}
+				else
+				{
+					result=ncv_copy_physical(io_buff,gva,size,true);
+					for(u64 i=0;i<size;i+=io_ctxt->access.operand_size)
+						address_space_write(&address_space_io,io_ctxt->port,attrs,&io_buff[i],io_ctxt->access.operand_size);
+				}
+				if(!result)
+				{
+					fprintf(stderr,"Failed to copy guest physical memory!\n");
+					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+					system("pause");
+				}
+				free(io_buff);
+			}
+			else
+			{
+				fprintf(stderr,"Failed to allocate buffer for String I/O!");
+				qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+			}
+		}
+		ncv_edit_vcpu_register(vmhandle,cpu->cpu_index,cv_ip,&exit_ctxt->next_rip,sizeof(exit_ctxt->next_rip));
 	}
 	else
 	{
-		MemTxAttrs attrs={0};
 		address_space_rw(&address_space_io,io_ctxt->port,attrs,&io_ctxt->rax,io_ctxt->access.operand_size,!io_ctxt->access.io_type);
 		if(io_ctxt->access.io_type)
 		{
@@ -183,13 +279,69 @@ static void ncv_handle_portio(CPUState *cpu,const cv_io_context_p io_ctxt)
 
 static void ncv_handle_mmio(CPUState *cpu,const cv_memory_access_context_p memory_access)
 {
-	fprintf(stderr,"NoirVisor CVM: MMIO is unsupported! %s Address=0x%llX\n",memory_access->access.write?"Writing to":"Reading from",memory_access->gpa);
-	qemu_system_guest_panicked(cpu_get_crash_info(cpu));
-	system("pause");
+	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
+	cv_exit_context_p exit_ctxt=&vcpu->exit_context;
+	if(unlikely(memory_access->access.execute))
+	{
+		fprintf(stderr,"NoirVisor CVM: Incorrect mapping for execution is detected! Execution GPA=0x%llX\n",memory_access->gpa);
+		qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+		system("pause");
+	}
+	else
+	{
+		if(likely(memory_access->flags.decoded))
+		{
+			cv_emu_mmio_info_p emu_mmio=alloca(sizeof(emu_mmio)+memory_access->flags.operand_size);
+			// If the MMIO operation is a read instruction, pre-fill the buffer.
+			if(memory_access->access.read)
+				cpu_physical_memory_read(memory_access->gpa,emu_mmio->data,memory_access->flags.operand_size);
+			noir_status st=ncv_try_cvexit_emulation(vmhandle,cpu->cpu_index,&emu_mmio->header);
+			switch(st)
+			{
+				case noir_success:
+				{
+					if(memory_access->access.write)
+						cpu_physical_memory_write(memory_access->gpa,emu_mmio->data,memory_access->flags.operand_size);
+					break;
+				}
+				case noir_emu_dual_memory_operands:
+				{
+					// This is not a emulation failure.
+					// It requires more processing regarding guest virtual address because there are two memory operands.
+					fprintf(stderr,"MMIO emulation failed because the MMIO instruction has two memory operands! GPA=0x%llX\n",memory_access->gpa);
+					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+					system("pause");
+					break;
+				}
+				case noir_emu_unknown_instruction:
+				{
+					fprintf(stderr,"MMIO emulation failed due to unknown instruction! See Kernel Debugger Output. GPA=0x%llX\n",memory_access->gpa);
+					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+					system("pause");
+					break;
+				}
+				default:
+				{
+					fprintf(stderr,"Unknown status (0x%X) of MMIO Emulation! GPA=0x%llX\n",st,memory_access->gpa);
+					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+					system("pause");
+					break;
+				}
+			}
+		}
+		else
+		{
+			fprintf(stderr,"NoirVisor CVM: Failed to decode instruction for MMIO! GPA=0x%llX\n",memory_access->gpa);
+			qemu_system_guest_panicked(cpu_get_crash_info(cpu));
+			system("pause");
+		}
+	}
 }
 
 static void ncv_handle_halt(CPUState *cpu)
 {
+	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
+	cv_exit_context_p exit_ctxt=&vcpu->exit_context;
 	CPUX86State *env=cpu->env_ptr;
 	qemu_mutex_lock_iothread();
 	if(!((cpu->interrupt_request & CPU_INTERRUPT_HARD) && (env->eflags & IF_MASK)) && !(cpu->interrupt_request & CPU_INTERRUPT_NMI))
@@ -198,6 +350,7 @@ static void ncv_handle_halt(CPUState *cpu)
 		cpu->halted=true;
 	}
 	qemu_mutex_unlock_iothread();
+	ncv_edit_vcpu_register(vmhandle,cpu->cpu_index,cv_ip,&exit_ctxt->next_rip,sizeof(exit_ctxt->next_rip));
 }
 
 static cv_seg_reg ncv_seg_q2v(const SegmentCache *qs)

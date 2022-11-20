@@ -18,6 +18,7 @@
 
 // Definitions of Status Codes of NoirVisor.
 #define noir_success					0
+#define noir_emu_dual_memory_operands	0x43000000
 #define noir_unsuccessful				0xC0000000
 #define noir_insufficient_resources		0xC0000001
 #define noir_not_implemented			0xC0000002
@@ -27,6 +28,8 @@
 #define noir_vcpu_already_created		0xC0000006
 #define noir_buffer_too_small			0xC0000007
 #define noir_vcpu_not_exist				0xC0000008
+#define noir_emu_not_emulatable			0xC3000000
+#define noir_emu_unknown_instruction	0xC3000001
 
 #ifdef CONFIG_WIN32
 typedef ULONG32 NOIR_STATUS;
@@ -341,7 +344,7 @@ typedef struct _cv_memory_access_context
 {
 	struct
 	{
-		u8 read:1;
+		u8 present:1;
 		u8 write:1;
 		u8 execute:1;
 		u8 user:1;
@@ -349,6 +352,13 @@ typedef struct _cv_memory_access_context
 	}access;
 	u8 instruction_bytes[15];
 	u64 gpa;
+	u64 gva;
+	struct
+	{
+		u64 operand_size:16;
+		u64 reserved:47;
+		u64 decoded:1;
+	}flags;
 }cv_memory_access_context,*cv_memory_access_context_p;
 
 typedef struct _cv_cpuid_context
@@ -385,7 +395,9 @@ typedef struct _cv_exit_context
 		u64 interrupt_shadow:1;
 		u64 instruction_length:4;
 		u64 int_pending:1;
-		u64 reserved:54;
+		u64 pg:1;
+		u64 pae:1;
+		u64 reserved:52;
 	}vp_state;
 }cv_exit_context,*cv_exit_context_p;
 
@@ -411,7 +423,7 @@ typedef struct _cv_emu_mmio_info
 	}emulation_property;
 	u64 address;
 	u64 data_size;
-	u8 data[64];
+	u8 data[1];
 }cv_emu_mmio_info,*cv_emu_mmio_info_p;
 
 typedef NOIR_STATUS noir_status;

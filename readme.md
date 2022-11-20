@@ -4,6 +4,9 @@ This repository serves as a subproject of Project NoirVisor. The purpose of this
 ## Original Readme
 Please read the [README_repo.rst](./README_repo.rst) for the original repository's readme.
 
+## Contribution
+The codes of NoirVisor CVM accelerator is located in the [noircv](./target/i386/noircv/readme.md) directory.
+
 ## Compilation
 Make sure you added `--enable-noircv` option while configuring the build system in order to build NoirVisor CVM accelerator. \
 For further documentation about building QEMU, please read [QEMU's wiki](https://wiki.qemu.org/Hosts/W32#Native_builds_with_MSYS2).

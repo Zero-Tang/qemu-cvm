@@ -1527,7 +1527,6 @@ static void whpx_update_mapping(hwaddr start_pa, ram_addr_t size,
     struct whpx_state *whpx = &whpx_global;
     HRESULT hr;
 
-    /*
     if (add) {
         printf("WHPX: ADD PA:%p Size:%p, Host:%p, %s, '%s'\n",
                (void*)start_pa, (void*)size, host_va,
@@ -1536,7 +1535,6 @@ static void whpx_update_mapping(hwaddr start_pa, ram_addr_t size,
         printf("WHPX: DEL PA:%p Size:%p, Host:%p,      '%s'\n",
                (void*)start_pa, (void*)size, host_va, name);
     }
-    */
 
     if (add) {
         hr = whp_dispatch.WHvMapGpaRange(whpx->partition,
