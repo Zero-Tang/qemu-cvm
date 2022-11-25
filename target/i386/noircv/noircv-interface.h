@@ -42,6 +42,11 @@ typedef ULONG32	u32;
 typedef ULONG64	u64;
 #endif
 
+#define ncv_event_extint		0
+#define ncv_event_nmi			2
+#define ncv_event_exception		3
+#define ncv_event_softint		4
+
 typedef enum _cv_vcpu_option_type
 {
 	cv_vcpu_options,

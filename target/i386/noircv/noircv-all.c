@@ -40,6 +40,10 @@ typedef struct _noircv_vcpu
 {
 	int cpu_index;
 	cv_exit_context exit_context;
+	bool ready_for_pic_interrupt;
+	bool interruptible;
+	bool window_registered;
+	bool interrupt_pending;
 }noircv_vcpu,*noircv_vcpu_p;
 
 static bool noircv_allowed;
@@ -105,7 +109,7 @@ static void ncv_update_mapping(hwaddr start_pa,ram_addr_t size,void* host_va,boo
 		map_info.attrib.caching=cv_memtype_wb;
 		map_info.attrib.page_size=0;
 	}
-	printf("NoirVisor CVM: %s mapping for GPA=0x%llX with HVA=0x%llX for 0x%X pages! Attributes=0x%08X\n",add?"Adding":"Removing",map_info.gpa,map_info.hva,map_info.page_total,map_info.attrib.value);
+	printf("NoirVisor CVM: %s mapping %s for GPA=0x%llX with HVA=0x%llX for 0x%X pages!\n",add?"Adding":"Removing",rom?"ROM":"RAM",map_info.gpa,map_info.hva,map_info.page_total);
 	noir_status st=ncv_set_mapping(vmhandle,&map_info);
 	if(st!=noir_success)
 	{
@@ -293,8 +297,9 @@ static void ncv_handle_mmio(CPUState *cpu,const cv_memory_access_context_p memor
 		{
 			cv_emu_mmio_info_p emu_mmio=alloca(sizeof(emu_mmio)+memory_access->flags.operand_size);
 			// If the MMIO operation is a read instruction, pre-fill the buffer.
-			if(memory_access->access.read)
+			if(!memory_access->access.write)
 				cpu_physical_memory_read(memory_access->gpa,emu_mmio->data,memory_access->flags.operand_size);
+			printf("Handing MMIO (%s): GPA=0x%llX, rip=0x%llX\n",memory_access->access.write?"Write":"Read",memory_access->gpa,exit_ctxt->rip);
 			noir_status st=ncv_try_cvexit_emulation(vmhandle,cpu->cpu_index,&emu_mmio->header);
 			switch(st)
 			{
@@ -343,6 +348,7 @@ static void ncv_handle_halt(CPUState *cpu)
 	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
 	cv_exit_context_p exit_ctxt=&vcpu->exit_context;
 	CPUX86State *env=cpu->env_ptr;
+	printf("[NoirVisor CVM] vCPU %d is halting...\n",cpu->cpu_index);
 	qemu_mutex_lock_iothread();
 	if(!((cpu->interrupt_request & CPU_INTERRUPT_HARD) && (env->eflags & IF_MASK)) && !(cpu->interrupt_request & CPU_INTERRUPT_NMI))
 	{
@@ -570,12 +576,72 @@ static void ncv_set_registers(CPUState *cpu,int level)
 	}
 }
 
+static void ncv_vcpu_process_async_events(CPUState *cpu)
+{
+	CPUX86State *env=cpu->env_ptr;
+	X86CPU *x86_cpu=X86_CPU(cpu);
+	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
+	if((cpu->interrupt_request & CPU_INTERRUPT_INIT) && !(env->hflags & HF_SMM_MASK))
+	{
+		ncv_cpu_synchronize_state(cpu);
+		do_cpu_init(x86_cpu);
+		vcpu->interruptible=true;
+	}
+	if(((cpu->interrupt_request & CPU_INTERRUPT_HARD) && (env->eflags & IF_MASK)) || (cpu->interrupt_request & CPU_INTERRUPT_NMI))
+		cpu->halted=false;
+	if(cpu->interrupt_request & CPU_INTERRUPT_SIPI)
+	{
+		ncv_cpu_synchronize_state(cpu);
+		do_cpu_sipi(x86_cpu);
+	}
+}
+
+static void ncv_vcpu_pre_run(CPUState *cpu)
+{
+	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
+	CPUX86State *env=cpu->env_ptr;
+	noir_status st=noir_success;
+	qemu_mutex_lock_iothread();
+	// Inject NMI
+	if(!vcpu->interrupt_pending)
+	{
+		if(cpu->interrupt_request & CPU_INTERRUPT_NMI)
+		{
+			cpu->interrupt_request&=~CPU_INTERRUPT_NMI;
+			vcpu->interruptible=false;
+			st=ncv_inject_event(vmhandle,cpu->cpu_index,true,EXCP02_NMI,ncv_event_nmi,0,false,0);
+			fprintf(stderr,"[NoirVisor CVM] Injecting NMI... Status=0x%X\n",st);
+		}
+		if(cpu->interrupt_request & CPU_INTERRUPT_SMI)
+		{
+			// NoirVisor can't take SMIs right now.
+			cpu->interrupt_request&=~CPU_INTERRUPT_SMI;
+			fprintf(stderr,"[NoirVisor CVM] NoirVisor does not support SMI!\n");
+		}
+		// Force the vCPU out of its inner loop, in order to process INIT or TPR accesses.
+		if((cpu->interrupt_request & CPU_INTERRUPT_INIT) && !(env->hflags & HF_SMM_MASK))
+			cpu->exit_request=1;
+		if(cpu->interrupt_request & CPU_INTERRUPT_TPR)cpu->exit_request=1;
+	}
+	if(vcpu->ready_for_pic_interrupt && (cpu->interrupt_request & CPU_INTERRUPT_HARD))
+	{
+		cpu->interrupt_request&=~CPU_INTERRUPT_HARD;
+		int irq=cpu_get_pic_interrupt(env);
+		if(irq>=0)st=ncv_inject_event(vmhandle,cpu->cpu_index,true,irq,ncv_event_extint,0,false,0);
+			fprintf(stderr,"[NoirVisor CVM] Injecting External Interrupt... Status=0x%X\n",st);
+	}
+	qemu_mutex_unlock_iothread();
+	vcpu->ready_for_pic_interrupt=false;
+}
+
 static void ncv_vcpu_post_run(CPUState *cpu)
 {
 	CPUX86State *env=cpu->env_ptr;
 	noircv_vcpu_p vcpu=(noircv_vcpu_p)cpu->hax_vcpu;
 	cv_exit_context_p exit_ctxt=&vcpu->exit_context;
 	env->eflags=exit_ctxt->rflags;
+	vcpu->interrupt_pending=exit_ctxt->vp_state.int_pending;
+	vcpu->interruptible=exit_ctxt->vp_state.interrupt_shadow;
 }
 
 static int ncv_vcpu_run(CPUState *cpu)
@@ -583,7 +649,7 @@ static int ncv_vcpu_run(CPUState *cpu)
 	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
 	noir_status st;
 	int ret=0;
-	// ncv_vcpu_process_async_events(cpu);
+	ncv_vcpu_process_async_events(cpu);
 	if(cpu->halted)
 	{
 		cpu->exception_index=EXCP_HLT;
@@ -600,7 +666,7 @@ static int ncv_vcpu_run(CPUState *cpu)
 			ncv_set_registers(cpu,NOIRCV_SET_RUNTIME_STATE);
 			cpu->vcpu_dirty=false;
 		}
-		// ncv_vcpu_pre_run(cpu);
+		ncv_vcpu_pre_run(cpu);
 		if(qatomic_read(&cpu->exit_request))ncv_kick_vcpu(cpu);
 		st=ncv_run_vcpu(vmhandle,cpu->cpu_index,exit_ctxt);
 		if(st!=noir_success)
