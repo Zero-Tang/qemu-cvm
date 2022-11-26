@@ -587,6 +587,11 @@ static void ncv_vcpu_process_async_events(CPUState *cpu)
 		do_cpu_init(x86_cpu);
 		vcpu->interruptible=true;
 	}
+	if(cpu->interrupt_request & CPU_INTERRUPT_POLL)
+	{
+		cpu->interrupt_request&=~CPU_INTERRUPT_POLL;
+		apic_poll_irq(x86_cpu->apic_state);
+	}
 	if(((cpu->interrupt_request & CPU_INTERRUPT_HARD) && (env->eflags & IF_MASK)) || (cpu->interrupt_request & CPU_INTERRUPT_NMI))
 		cpu->halted=false;
 	if(cpu->interrupt_request & CPU_INTERRUPT_SIPI)
@@ -602,7 +607,6 @@ static void ncv_vcpu_pre_run(CPUState *cpu)
 	CPUX86State *env=cpu->env_ptr;
 	noir_status st=noir_success;
 	qemu_mutex_lock_iothread();
-	// Inject NMI
 	if(!vcpu->interrupt_pending)
 	{
 		if(cpu->interrupt_request & CPU_INTERRUPT_NMI)
@@ -622,13 +626,13 @@ static void ncv_vcpu_pre_run(CPUState *cpu)
 		if((cpu->interrupt_request & CPU_INTERRUPT_INIT) && !(env->hflags & HF_SMM_MASK))
 			cpu->exit_request=1;
 		if(cpu->interrupt_request & CPU_INTERRUPT_TPR)cpu->exit_request=1;
-	}
-	if(vcpu->ready_for_pic_interrupt && (cpu->interrupt_request & CPU_INTERRUPT_HARD))
-	{
-		cpu->interrupt_request&=~CPU_INTERRUPT_HARD;
-		int irq=cpu_get_pic_interrupt(env);
-		if(irq>=0)st=ncv_inject_event(vmhandle,cpu->cpu_index,true,irq,ncv_event_extint,0,false,0);
-			fprintf(stderr,"[NoirVisor CVM] Injecting External Interrupt... Status=0x%X\n",st);
+		if(cpu->interrupt_request & CPU_INTERRUPT_HARD)
+		{
+			cpu->interrupt_request&=~CPU_INTERRUPT_HARD;
+			int irq=cpu_get_pic_interrupt(env);
+			if(irq>=0)st=ncv_inject_event(vmhandle,cpu->cpu_index,true,irq,ncv_event_extint,0,false,0);
+				fprintf(stderr,"[NoirVisor CVM] Injecting External Interrupt... Status=0x%X\n",st);
+		}
 	}
 	qemu_mutex_unlock_iothread();
 	vcpu->ready_for_pic_interrupt=false;
@@ -642,6 +646,7 @@ static void ncv_vcpu_post_run(CPUState *cpu)
 	env->eflags=exit_ctxt->rflags;
 	vcpu->interrupt_pending=exit_ctxt->vp_state.int_pending;
 	vcpu->interruptible=exit_ctxt->vp_state.interrupt_shadow;
+	vcpu->ready_for_pic_interrupt=(exit_ctxt->rflags&IF_MASK)==IF_MASK;
 }
 
 static int ncv_vcpu_run(CPUState *cpu)
