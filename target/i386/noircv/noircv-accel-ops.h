@@ -30,11 +30,11 @@ noir_status ncv_create_vcpu(cv_handle vm,u32 vpid);
 noir_status ncv_delete_vcpu(cv_handle vm,u32 vpid);
 noir_status ncv_set_mapping(cv_handle vm,cv_addr_map_info *mapping_info);
 noir_status ncv_inject_event(cv_handle vm,u32 vpid,bool valid,u8 vector,u8 type,u8 priority,bool error_code_valid,u32 err_code);
+noir_status ncv_set_vcpu_options(cv_handle vm,u32 vpid,cv_vcpu_option_type type,u32 data);
 noir_status ncv_edit_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,void* buffer,u32 buff_size);
 noir_status ncv_view_vcpu_register(cv_handle vm,u32 vpid,cv_reg_type reg_type,void* buffer,u32 buff_size);
 noir_status ncv_run_vcpu(cv_handle vm,u32 vpid,cv_exit_context *exit_context);
 noir_status ncv_rescind_vcpu(cv_handle vm,u32 vpid);
-noir_status ncv_try_cvexit_emulation(cv_handle vm,u32 vpid,cv_emu_info_header_p info);
 int ncv_win_init(void);
 
 #define NOIRCV_SET_RUNTIME_STATE    1

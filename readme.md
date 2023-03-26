@@ -18,7 +18,7 @@ I recommend to configure QEMU with the following options:
 Make sure you are entering this command from MinGW64 console shell from `build` directory.
 
 ## Debug
-In order to debug QEMU, you must configure the `--enable-debug` option.
+You may use GDB in MSYS to debug QEMU.
 
 ## Run
 You may copy dynamic-link library files from msys2 to the QEMU build directory in order to resolve QEMU's library dependencies.

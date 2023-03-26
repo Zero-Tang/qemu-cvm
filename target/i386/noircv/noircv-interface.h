@@ -18,7 +18,6 @@
 
 // Definitions of Status Codes of NoirVisor.
 #define noir_success					0
-#define noir_emu_dual_memory_operands	0x43000000
 #define noir_unsuccessful				0xC0000000
 #define noir_insufficient_resources		0xC0000001
 #define noir_not_implemented			0xC0000002
@@ -28,8 +27,6 @@
 #define noir_vcpu_already_created		0xC0000006
 #define noir_buffer_too_small			0xC0000007
 #define noir_vcpu_not_exist				0xC0000008
-#define noir_emu_not_emulatable			0xC3000000
-#define noir_emu_unknown_instruction	0xC3000001
 
 #ifdef CONFIG_WIN32
 typedef ULONG32 NOIR_STATUS;
@@ -40,6 +37,10 @@ typedef BYTE	u8;
 typedef USHORT	u16;
 typedef ULONG32	u32;
 typedef ULONG64	u64;
+typedef CHAR	i8;
+typedef SHORT	i16;
+typedef LONG32	i32;
+typedef LONG64	i64;
 #endif
 
 #define ncv_event_extint		0
@@ -50,8 +51,52 @@ typedef ULONG64	u64;
 typedef enum _cv_vcpu_option_type
 {
 	cv_vcpu_options,
-	cv_exception_bitmap
+	cv_exception_bitmap,
+	cv_scheduling_priority,
+	cv_msr_interception
 }cv_vcpu_option_type,*cv_vcpu_option_type_p;
+
+typedef union _cv_vcpu_option
+{
+	struct
+	{
+		u32 intercept_cpuid:1;
+		u32 intercept_msr:1;
+		u32 intercept_interrupt_window:1;
+		u32 intercept_exceptions:1;
+		u32 intercept_cr3:1;
+		u32 intercept_drx:1;
+		u32 intercept_pause:1;
+		u32 npiep:1;
+		u32 intercept_nmi_window:1;
+		u32 intercept_rsm:1;
+		u32 blocking_by_nmi:1;
+		u32 hidden_tf:1;
+		u32 interrupt_shadow:1;
+		u32 decode_memory_access_instruction:1;
+		u32 use_tunnel:1;
+		u32 tunnel_format:3;
+		u32 reserved:14;
+	};
+	u32 value;
+}cv_vcpu_option,*cv_vcpu_option_p;
+
+typedef union _cv_msr_intercept
+{
+	struct
+	{
+		u32 intercept_syscall:1;
+		u32 intercept_sysenter:1;
+		u32 intercept_smm:1;
+		u32 intercept_apic:1;
+		u32 intercept_mtrr:1;
+		u32 intercept_mca:1;
+		u32 intercept_cet:1;
+		u32 reserved:24;
+		u32 valid:1;
+	};
+	u32 value;
+}cv_msr_intercept,*cv_msr_intercept_p;
 
 typedef struct _cv_gpr_state
 {
@@ -345,6 +390,19 @@ typedef struct _cv_msr_context
 	u32 ecx;
 }cv_msr_context,*cv_msr_context_p;
 
+#define cv_operand_class_gpr		0
+#define cv_operand_class_gpr8hi		1
+#define cv_operand_class_memory		2
+#define cv_operand_class_farptr		3
+#define cv_operand_class_immediate	4
+#define cv_operand_class_segsel		5
+#define cv_operand_class_fpr		6
+#define cv_operand_class_simd		7
+#define cv_operand_class_unknown	31
+
+#define cv_instruction_code_mov			0
+#define cv_instruction_code_unknown		0xFFFF
+
 typedef struct _cv_memory_access_context
 {
 	struct
@@ -361,9 +419,32 @@ typedef struct _cv_memory_access_context
 	struct
 	{
 		u64 operand_size:16;
-		u64 reserved:47;
+		u64 instruction_code:16;
+		u64 operand_class:5;
+		u64 operand_code:7;
+		u64 reserved:19;
 		u64 decoded:1;
 	}flags;
+	union
+	{
+		struct
+		{
+			bool is_signed;
+			union
+			{
+				u64 u;
+				i64 i;
+			};
+		}imm;
+		u64 mem;
+		struct
+		{
+			u16 segment;
+			u16 reserved0;
+			u32 offset;
+			u64 reserved1;
+		}far;
+	}operand;
 }cv_memory_access_context,*cv_memory_access_context_p;
 
 typedef struct _cv_cpuid_context
@@ -405,31 +486,6 @@ typedef struct _cv_exit_context
 		u64 reserved:52;
 	}vp_state;
 }cv_exit_context,*cv_exit_context_p;
-
-typedef struct _cv_emu_info_header
-{
-	u32 length;
-	u32 type;
-}cv_emu_info_header,*cv_emu_info_header_p;
-
-typedef struct _cv_emu_mmio_info
-{
-	cv_emu_info_header header;
-	union
-	{
-		struct
-		{
-			u64 direction:1;
-			u64 advancement_length:4;
-			u64 reserved:27;
-			u64 access_size:32;
-		};
-		u64 value;
-	}emulation_property;
-	u64 address;
-	u64 data_size;
-	u8 data[1];
-}cv_emu_mmio_info,*cv_emu_mmio_info_p;
 
 typedef NOIR_STATUS noir_status;
 typedef CVM_HANDLE cv_handle;

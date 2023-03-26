@@ -38,9 +38,7 @@ static void* ncv_cpu_thread_rt(void* arg)
         if(cpu_can_run(cpu))
             if(ncv_exec_vcpu(cpu)==EXCP_DEBUG)
                 cpu_handle_guest_debug(cpu);
-        while(cpu_thread_is_idle(cpu))
-            qemu_cond_wait_iothread(cpu->halt_cond);
-        qemu_wait_io_event_common(cpu);
+        qemu_wait_io_event(cpu);
     }while(!cpu->unplug || cpu_can_run(cpu));
     ncv_destroy_vcpu(cpu);
     cpu_thread_signal_destroyed(cpu);

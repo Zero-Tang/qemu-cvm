@@ -80,17 +80,6 @@ noir_status ncv_inject_event(cv_handle vm,u32 vpid,bool valid,u8 vector,u8 type,
 	return st;
 }
 
-noir_status ncv_try_cvexit_emulation(cv_handle vm,u32 vpid,cv_emu_info_header_p info)
-{
-	NOIR_STATUS st=noir_unsuccessful;
-	ULONG64 InBuff[3];
-	InBuff[0]=vm;
-	InBuff[1]=(ULONG64)vpid;
-	InBuff[2]=(ULONG64)info;
-	NoirControlDriver(IOCTL_CvmTryEmuExit,InBuff,sizeof(InBuff),&st,sizeof(st),NULL);
-	return st;
-}
-
 noir_status ncv_run_vcpu(cv_handle vm,u32 vpid,cv_exit_context *exit_context)
 {
 	NOIR_STATUS st=noir_unsuccessful;
@@ -116,6 +105,18 @@ noir_status ncv_rescind_vcpu(cv_handle vm,u32 vpid)
 	NOIR_STATUS st=noir_unsuccessful;
 	ULONG64 InBuff[2]={vm,(ULONG64)vpid};
 	NoirControlDriver(IOCTL_CvmRescindVcpu,InBuff,sizeof(InBuff),&st,sizeof(st),NULL);
+	return st;
+}
+
+noir_status ncv_set_vcpu_options(cv_handle vm,u32 vpid,cv_vcpu_option_type type,u32 data)
+{
+	NOIR_STATUS st=noir_unsuccessful;
+	ULONG64 InBuff[3];
+	InBuff[0]=vm;
+	InBuff[1]=(ULONG64)vpid;
+	*(PULONG32)((ULONG_PTR)&InBuff[2]+0)=type;
+	*(PULONG32)((ULONG_PTR)&InBuff[2]+4)=data;
+	NoirControlDriver(IOCTL_CvmSetVcpuOptions,InBuff,sizeof(InBuff),&st,sizeof(st),NULL);
 	return st;
 }
 

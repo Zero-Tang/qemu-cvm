@@ -29,13 +29,6 @@
 
 #include "noircv-accel-ops.h"
 
-typedef struct _cvmap_list
-{
-	hwaddr start_pa;
-	ram_addr_t size;
-	void* host_va;
-}cvmap_list,*cvmap_list_p;
-
 typedef struct _noircv_vcpu
 {
 	int cpu_index;
@@ -49,9 +42,6 @@ typedef struct _noircv_vcpu
 static bool noircv_allowed;
 static cv_handle vmhandle;
 
-#define cv_map_list_limit	32
-cvmap_list cv_map_info_list[cv_map_list_limit];
-
 int noircv_enabled(void)
 {
 	return noircv_allowed;
@@ -60,37 +50,6 @@ int noircv_enabled(void)
 static noircv_vcpu_p get_noircv_vcpu(CPUState *cpu)
 {
 	return (noircv_vcpu_p)cpu->hax_vcpu;
-}
-
-static bool ncv_copy_physical(void* buffer,u64 gpa,u64 size,bool read)
-{
-	u64 cur_gpa=gpa;
-	u64 rem_size=size;
-	void* cur_buff=buffer;
-	bool fully_copied=false;
-	for(u32 i=0;i<cv_map_list_limit;i++)
-	{
-		cvmap_list_p info=&cv_map_info_list[i];
-		if(cur_gpa>=info->start_pa && cur_gpa<info->start_pa+info->size)
-		{
-			u64 region_offset=cur_gpa-info->start_pa;
-			u64 region_remainder=info->size-region_offset;
-			u64 copy_size=rem_size>region_remainder?region_remainder:rem_size;
-			if(read)
-				memcpy(cur_buff,(void*)((uintptr_t)info->host_va+region_offset),copy_size);
-			else
-				memcpy((void*)((uintptr_t)info->host_va+region_offset),cur_buff,copy_size);
-			cur_gpa+=copy_size;
-			cur_buff=(void*)((uintptr_t)cur_buff+copy_size);
-			rem_size-=copy_size;
-			if(rem_size==0)
-			{
-				fully_copied=true;
-				break;
-			}
-		}
-	}
-	return fully_copied;
 }
 
 static void ncv_update_mapping(hwaddr start_pa,ram_addr_t size,void* host_va,bool add,bool rom)
@@ -120,7 +79,6 @@ static void ncv_update_mapping(hwaddr start_pa,ram_addr_t size,void* host_va,boo
 
 static void ncv_process_section(MemoryRegionSection *section,bool add)
 {
-	bool list_mapped=false;
 	MemoryRegion *mr=section->mr;
 	hwaddr start_pa=section->offset_within_address_space;
 	ram_addr_t size=int128_get64(section->size);
@@ -135,25 +93,6 @@ static void ncv_process_section(MemoryRegionSection *section,bool add)
 	size&=qemu_real_host_page_mask;
 	if(!size || (start_pa & ~qemu_real_host_page_mask))return;
 	host_va=(uintptr_t)memory_region_get_ram_ptr(mr)+section->offset_within_region+delta;
-	// Add updates...
-	for(u32 i=0;i<cv_map_list_limit;i++)
-	{
-		if(add && cv_map_info_list[i].host_va==NULL)
-		{
-			cv_map_info_list[i].host_va=(void*)host_va;
-			cv_map_info_list[i].start_pa=start_pa;
-			cv_map_info_list[i].size=size;
-			list_mapped=true;
-			break;
-		}
-		else if((!add) && (cv_map_info_list[i].start_pa==start_pa) && (cv_map_info_list[i].size==size))
-		{
-			memset(&cv_map_info_list[i],0,sizeof(cvmap_list));
-			list_mapped=true;
-			break;
-		}
-	}
-	if(!list_mapped)fprintf(stderr,"Failed to process section!\n");
 	// Update NPT.
 	ncv_update_mapping(start_pa,size,(void*)host_va,add,memory_region_is_rom(mr));
 }
@@ -237,25 +176,18 @@ static void ncv_handle_portio(CPUState *cpu,const cv_io_context_p io_ctxt)
 			u8 *io_buff=malloc(size);
 			if(io_buff)
 			{
-				bool result;
 				// Make sure to split in I/O address space, or otherwise it will be overflowing to other ports.
 				if(io_ctxt->access.io_type)
 				{
 					for(u64 i=0;i<size;i+=io_ctxt->access.operand_size)
 						address_space_read(&address_space_io,io_ctxt->port,attrs,&io_buff[i],io_ctxt->access.operand_size);
-					result=ncv_copy_physical(io_buff,gva,size,false);
+					cpu_physical_memory_write(gva,io_buff,size);
 				}
 				else
 				{
-					result=ncv_copy_physical(io_buff,gva,size,true);
+					cpu_physical_memory_read(gva,io_buff,size);
 					for(u64 i=0;i<size;i+=io_ctxt->access.operand_size)
 						address_space_write(&address_space_io,io_ctxt->port,attrs,&io_buff[i],io_ctxt->access.operand_size);
-				}
-				if(!result)
-				{
-					fprintf(stderr,"Failed to copy guest physical memory!\n");
-					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
-					system("pause");
 				}
 				free(io_buff);
 			}
@@ -283,8 +215,6 @@ static void ncv_handle_portio(CPUState *cpu,const cv_io_context_p io_ctxt)
 
 static void ncv_handle_mmio(CPUState *cpu,const cv_memory_access_context_p memory_access)
 {
-	noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
-	cv_exit_context_p exit_ctxt=&vcpu->exit_context;
 	if(unlikely(memory_access->access.execute))
 	{
 		fprintf(stderr,"NoirVisor CVM: Incorrect mapping for execution is detected! Execution GPA=0x%llX\n",memory_access->gpa);
@@ -295,44 +225,54 @@ static void ncv_handle_mmio(CPUState *cpu,const cv_memory_access_context_p memor
 	{
 		if(likely(memory_access->flags.decoded))
 		{
-			cv_emu_mmio_info_p emu_mmio=alloca(sizeof(emu_mmio)+memory_access->flags.operand_size);
-			// If the MMIO operation is a read instruction, pre-fill the buffer.
-			if(!memory_access->access.write)
-				cpu_physical_memory_read(memory_access->gpa,emu_mmio->data,memory_access->flags.operand_size);
-			printf("Handing MMIO (%s): GPA=0x%llX, rip=0x%llX\n",memory_access->access.write?"Write":"Read",memory_access->gpa,exit_ctxt->rip);
-			noir_status st=ncv_try_cvexit_emulation(vmhandle,cpu->cpu_index,&emu_mmio->header);
-			switch(st)
+			noircv_vcpu_p vcpu=get_noircv_vcpu(cpu);
+			cv_exit_context_p exit_ctxt=&vcpu->exit_context;
+			printf("NoirVisor CVM: Intercepted MMIO! GPA=0x%llX (%s) Operand-Size: %u, Instruction-Code: %u, Operand-Class: %u, Operand-Code: %u\n",memory_access->gpa,memory_access->access.write?"Write":"Read",memory_access->flags.operand_size,memory_access->flags.instruction_code,memory_access->flags.operand_class,memory_access->flags.operand_code);
+			switch(memory_access->flags.instruction_code)
 			{
-				case noir_success:
+				case cv_instruction_code_mov:
 				{
-					if(memory_access->access.write)
-						cpu_physical_memory_write(memory_access->gpa,emu_mmio->data,memory_access->flags.operand_size);
-					break;
-				}
-				case noir_emu_dual_memory_operands:
-				{
-					// This is not a emulation failure.
-					// It requires more processing regarding guest virtual address because there are two memory operands.
-					fprintf(stderr,"MMIO emulation failed because the MMIO instruction has two memory operands! GPA=0x%llX\n",memory_access->gpa);
-					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
-					system("pause");
-					break;
-				}
-				case noir_emu_unknown_instruction:
-				{
-					fprintf(stderr,"MMIO emulation failed due to unknown instruction! See Kernel Debugger Output. GPA=0x%llX\n",memory_access->gpa);
-					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
-					system("pause");
+					switch(memory_access->flags.operand_class)
+					{
+						case cv_operand_class_gpr:
+						case cv_operand_class_gpr8hi:
+						{
+							u64 gprs[16];
+							ncv_view_vcpu_register(vmhandle,cpu->cpu_index,cv_gpr,gprs,sizeof(gprs));
+							if(memory_access->flags.operand_class==cv_operand_class_gpr8hi)
+							{
+								fprintf(stderr,"Hi-8 GPR as MMIO operand is currently unsupported!\n");
+							}
+							else
+							{
+								cpu_physical_memory_rw(memory_access->gpa,&gprs[memory_access->flags.operand_code],memory_access->flags.operand_size,memory_access->access.write);
+								if(memory_access->flags.operand_size==4)	// Clear higher 32 bits.
+									gprs[memory_access->flags.operand_code]&=0xFFFFFFFF;
+								if(!memory_access->access.write)
+									ncv_edit_vcpu_register(vmhandle,cpu->cpu_index,cv_gpr,gprs,sizeof(gprs));
+							}
+							break;
+						}
+						case cv_operand_class_immediate:
+						{
+							// This could only be a write.
+							cpu_physical_memory_write(memory_access->gpa,&memory_access->operand.imm.u,memory_access->flags.operand_size);
+							break;
+						}
+						default:
+						{
+							fprintf(stderr,"Unknown operand class (%u) of MMIO!\n",memory_access->flags.operand_class);
+							break;
+						}
+					}
 					break;
 				}
 				default:
 				{
-					fprintf(stderr,"Unknown status (0x%X) of MMIO Emulation! GPA=0x%llX\n",st,memory_access->gpa);
-					qemu_system_guest_panicked(cpu_get_crash_info(cpu));
-					system("pause");
-					break;
+					fprintf(stderr,"Unknown instruction code (%u) of MMIO!\n",memory_access->flags.instruction_code);
 				}
 			}
+			ncv_edit_vcpu_register(vmhandle,cpu->cpu_index,cv_ip,&exit_ctxt->next_rip,sizeof(exit_ctxt->next_rip));
 		}
 		else
 		{
@@ -630,7 +570,7 @@ static void ncv_vcpu_pre_run(CPUState *cpu)
 		{
 			cpu->interrupt_request&=~CPU_INTERRUPT_HARD;
 			int irq=cpu_get_pic_interrupt(env);
-			if(irq>=0)st=ncv_inject_event(vmhandle,cpu->cpu_index,true,irq,ncv_event_extint,0,false,0);
+			if(irq>=0)st=ncv_inject_event(vmhandle,cpu->cpu_index,true,irq,ncv_event_extint,15,false,0);
 				fprintf(stderr,"[NoirVisor CVM] Injecting External Interrupt... Status=0x%X\n",st);
 		}
 	}
@@ -706,10 +646,26 @@ static int ncv_vcpu_run(CPUState *cpu)
 				ret=1;
 				break;
 			}
+			case cv_rdmsr_instruction:
+			{
+				printf("The rdmsr instruction is intercepted! index=0x%X\n",exit_ctxt->msr.ecx);
+				ncv_edit_vcpu_register(vmhandle,cpu->cpu_index,cv_ip,&exit_ctxt->next_rip,sizeof(exit_ctxt->next_rip));
+				break;
+			}
+			case cv_wrmsr_instruction:
+			{
+				printf("The wrmsr instruction is intercepted! index=0x%X, value=0x%08X`%08X\n",exit_ctxt->msr.ecx,exit_ctxt->msr.edx,exit_ctxt->msr.eax);
+				ncv_edit_vcpu_register(vmhandle,cpu->cpu_index,cv_ip,&exit_ctxt->next_rip,sizeof(exit_ctxt->next_rip));
+				break;
+			}
 			case cv_io_instruction:
 			{
 				ncv_handle_portio(cpu,&exit_ctxt->io);
 				ret=1;
+				break;
+			}
+			case cv_exception:
+			{
 				break;
 			}
 			case cv_rescission:
@@ -820,6 +776,31 @@ void ncv_init_vcpu(CPUState *cpu)
 			fprintf(stderr,"Failed to create vCPU %d! Status: 0x%X\n",cpu->cpu_index,st);
 			g_free(vcpu);
 			return;
+		}
+		else
+		{
+			cv_vcpu_option vp_opt;
+			cv_msr_intercept msr_exit;
+			vp_opt.value=0;
+			vp_opt.intercept_msr=1;
+			vp_opt.decode_memory_access_instruction=1;
+			st=ncv_set_vcpu_options(vmhandle,cpu->cpu_index,cv_vcpu_options,vp_opt.value);
+			if(st!=noir_success)
+			{
+				fprintf(stderr,"Failed to set vCPU %d options! Status:0x%X\n",cpu->cpu_index,st);
+				g_free(vcpu);
+				return;
+			}
+			msr_exit.value=0;
+			msr_exit.valid=1;
+			msr_exit.intercept_mtrr=1;
+			st=ncv_set_vcpu_options(vmhandle,cpu->cpu_index,cv_msr_interception,msr_exit.value);
+			if(st!=noir_success)
+			{
+				fprintf(stderr,"Failed to set vCPU %d MSR-Interception! Status:0x%X\n",cpu->cpu_index,st);
+				g_free(vcpu);
+				return;
+			}
 		}
 		cpu->vcpu_dirty=true;
 		cpu->hax_vcpu=(struct hax_vcpu_state*)vcpu;
